@@ -36,22 +36,12 @@ Five controllers, matched to identical closed-loop bandwidth (ωₙ = 3 rad/s, �
 | climb | 4.0 | 3.4 | 5.9 | 4.7 | **2.6** |
 | ratelimit | 6.0 | 4.9 | 12.2 | 5.1 | **1.2** |
 
-Zero for drop, gust and noise — the thrust limit never binds there.
-
 ## What the numbers show
 
-**Steady-state rejection depends on integral or estimator action, not complexity.** LQR and MPC both leave a permanent offset after the payload drop (0.31 m, 0.44 m) because neither has integral action. PID, LQI and L1 remove it.
+The results suggest that steady-state rejection depends more on integral or estimator action than on controller complexity. LQR and MPC both leave a noticeable offset after the payload drop, around 0.31 m and 0.44 m respectively, because neither of them includes integral action. PID, LQI, and L1 remove that offset much more effectively.
 
-**Estimation beats integration on time-varying disturbances.** L1's margin widens from 2× over LQI on the constant `drop` disturbance to 3× over PID on the sinusoidal `gust`. Integral action carries a fixed −90° phase and cannot track a moving target; the predictor error is instantaneous.
+The comparison also shows that estimation is better than pure integration when the disturbance changes over time. L1 performs increasingly well as the disturbance becomes time-varying: its advantage grows from about 2× better than LQI on the constant drop case to roughly 3× better than PID on the sinusoidal gust case. This makes sense because integral action has a fixed phase lag and cannot track a moving disturbance as quickly as the predictor-based estimate does.
 
-**MPC's advantage requires active constraints.** It wins only where the actuator saturates — 1.2% on `ratelimit` versus 5–12% for the others. On the unconstrained scenarios it behaves like LQR, which is expected: unconstrained MPC *is* LQR.
+MPC only stands out when the actuator hits its limits. It wins on the constrained scenarios, such as ratelimit, where saturation is around 1.2%, compared with 5–12% for the other controllers. On unconstrained scenarios, it behaves much like LQR, which is expected because an unconstrained MPC reduces to the same quadratic optimal regulator structure.
 
-**Integral action has a cost.** LQI is second-best on `drop` but worst on `ratelimit` saturation (12.2%) — the integral state adds gain and phase lag, i.e. windup.
-
-## Limitations
-
-`noise` did not discriminate — all five land within 0.4 mm, at the noise floor.
-
-`climb` and `ratelimit` RMS values are dominated by the step transient and by where the square wave happens to sit at the end; only the saturation column is meaningful there.
-
-Matching all controllers to a common bandwidth is correct for structural comparison, but it fixes LQR's `Q/R` — which is precisely the tradeoff LQR is designed to optimise. Its measured control effort tied exactly with PID and L1 (~357 N/s) as a result.
+There is also a tradeoff with integral action. LQI is strong on the payload-drop case, but it is the worst performer on the rate-limited scenario, with saturation reaching 12.2%. That penalty comes from the extra integral state, which adds lag and makes the controller more prone to windup under constraint limits.
