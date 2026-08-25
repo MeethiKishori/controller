@@ -1,0 +1,161 @@
+"""
+L1 adaptive altitude hold - animated payload drop.
+
+Drone hovers at 2 m carrying a payload. At t = t_drop the payload releases
+and falls away. The baseline controller still assumes the vehicle weighs
+m_nom, so it over-thrusts and the drone climbs. L1 estimates the mismatch
+and brings it back.
+
+Set L1_ON = False to see the failure (a permanent offset, no recovery).
+
+Run:  python l1_payload_drop.py            (--save writes a gif)
+"""
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+# ---------------- setup ----------------
+L1_ON   = True
+g       = 9.81
+m_dry   = 1.0             # drone alone                       [kg]
+m_pay   = 2.0            # payload                           [kg]
+m_nom   = m_dry + m_pay   # what the controller always assumes
+wn, ze  = 3.0, 0.9        # altitude loop bandwidth / damping
+z_ref   = 2.0             # commanded altitude                [m]
+t_drop  = 1.0
+
+Gamma, k = 2000.0, 25.0   # Gamma=400 leaves ~1.8 cm on the table; 2000 converges
+dt, T    = 1e-4, 5.0
+t        = np.arange(0, T, dt)
+
+# vehicle panel zoom - the overshoot is ~5 cm, invisible on a 0-4 m axis
+Z_LO, Z_HI = 1.75, 2.35
+SC = (Z_HI - Z_LO)/4.0    # shrinks the drone drawing to match the zoomed window
+
+# P from lyap(Am', I) for Am = [[0,1],[-a,-c]], then P*b with b = [0, 1/m_nom]
+a, c = wn**2, 2*ze*wn
+p2   = 1/(2*a)
+p3   = (1/a + 1)/(2*c)
+P_b  = np.array([p2, p3])/m_nom
+
+# ---------------- simulate ----------------
+z  = np.array([z_ref, 0.0])     # true      [z, zdot]
+zh = np.array([z_ref, 0.0])     # predictor
+zr = np.array([z_ref, 0.0])     # reference model
+sh, u = 0.0, 0.0
+L = np.zeros((len(t), 7))
+
+for i, tk in enumerate(t):
+    m = m_dry if tk >= t_drop else m_nom          # <-- the payload drop
+
+    T_cmd = m_nom*(g + a*(z_ref - z[0]) - c*z[1]) + (u if L1_ON else 0.0)
+    T_cmd = np.clip(T_cmd, 0.0, 4*m_nom*g)        # motors can't pull down
+
+    z  += dt*np.array([z[1],  T_cmd/m - g])
+    zh += dt*np.array([zh[1], a*(z_ref-zh[0]) - c*zh[1] + (u + sh)/m_nom])
+    zr += dt*np.array([zr[1], a*(z_ref-zr[0]) - c*zr[1]])
+
+    if L1_ON:
+        sh += dt*(-Gamma*np.dot(zh - z, P_b))
+        u  += dt*k*(-sh - u)
+
+    L[i] = [z[0], zr[0], sh, u, T_cmd, m, (zh - z)[0]]
+
+alt, ref, sig, u_log, thr, mass, xtil = L.T
+tail = alt[int(0.8*len(t)):]
+print(f"L1_ON = {L1_ON}")
+print(f"peak altitude   : {alt.max():.4f} m   (overshoot {alt.max()-z_ref:+.4f} m)")
+print(f"final error     : {tail.mean()-z_ref:+.5f} m")
+print(f"sigma_hat final : {sig[-1]:.3f}")
+
+i_drop    = int(t_drop/dt)
+z_release = alt[i_drop] - 0.32*SC        # where the box starts falling from
+
+# ---------------- figure ----------------
+skip = 20
+ta   = t[::skip]
+fig  = plt.figure(figsize=(14, 8))
+gs   = fig.add_gridspec(3, 3, width_ratios=[1, 1.4, 1.4], hspace=.35, wspace=.28)
+fig.suptitle(f'L1 altitude hold - payload drop at t={t_drop}s   (L1_ON={L1_ON})')
+
+# --- left column: the vehicle, zoomed ---
+axd = fig.add_subplot(gs[:, 0])
+axd.set_xlim(-1, 1); axd.set_ylim(Z_LO, Z_HI)
+axd.axhline(z_ref, ls='--', c='gray', lw=1)
+axd.text(-.95, z_ref + .012*(Z_HI-Z_LO), 'target', color='gray', fontsize=9)
+axd.set_ylabel('altitude [m]'); axd.set_xticks([])
+axd.set_title('vehicle (zoomed)')
+arm,    = axd.plot([], [], 'k-', lw=3)
+rot,    = axd.plot([], [], 'ko', ms=9)
+tether, = axd.plot([], [], 'k-', lw=1)
+pay,    = axd.plot([], [], 's', color='#D85A30', ms=13)
+clock   = axd.text(-.95, Z_HI - .08*(Z_HI-Z_LO), '', fontsize=11)
+
+def panel(pos, ylab, title, ylim=None):
+    ax = fig.add_subplot(pos)
+    ax.set_ylabel(ylab, fontsize=9); ax.set_title(title, fontsize=10)
+    ax.set_xlim(0, T); ax.grid(alpha=.3)
+    ax.axvline(t_drop, c='gray', ls=':', lw=1)
+    if ylim: ax.set_ylim(*ylim)
+    return ax
+
+ax1 = panel(gs[0, 1], 'z [m]',     '1. altitude vs reference')
+ax2 = panel(gs[1, 1], 'err [m]',   '2. tracking error')
+ax3 = panel(gs[2, 1], 'mass [kg]', '3. true mass (unknown to controller)',
+            (m_dry - 0.15, m_nom + 0.15))
+ax4 = panel(gs[0, 2], 'sigma_hat', '4. disturbance estimate')
+ax5 = panel(gs[1, 2], '[N]',       '5. L1 output u and total thrust')
+ax6 = panel(gs[2, 2], '[m]',       '6. prediction error  zhat - z')
+for ax in (ax3, ax6): ax.set_xlabel('t [s]', fontsize=9)
+
+lines = {}
+lines['alt'], = ax1.plot([], [], 'C0', lw=1.8, label='actual')
+lines['ref'], = ax1.plot([], [], 'k--', lw=1, label='reference')
+lines['err'], = ax2.plot([], [], 'C3', lw=1.5)
+lines['mas'], = ax3.plot([], [], 'C2', lw=2)
+lines['sig'], = ax4.plot([], [], 'C1', lw=1.5)
+lines['u'],   = ax5.plot([], [], 'C2', lw=1.5, label='u (L1)')
+lines['thr'], = ax5.plot([], [], 'C7', lw=1, alpha=.6, label='total thrust')
+lines['xt'],  = ax6.plot([], [], 'C4', lw=1.2)
+ax1.legend(fontsize=8); ax5.legend(fontsize=8)
+for ax in (ax2, ax4, ax6): ax.axhline(0, c='k', lw=.5)
+
+pad = max(0.02, (alt.max()-alt.min())*0.15)
+ax1.set_ylim(alt.min()-pad, alt.max()+pad)
+ax2.set_ylim(min(-0.01, (alt-ref).min()*1.2), max(0.02, (alt-ref).max()*1.2))
+ax4.set_ylim(min(sig.min(), -.5)*1.2 - .1, max(sig.max(), .5)*1.2)
+ax5.set_ylim(min(u_log.min(), 0) - 1, max(thr.max(), 1)*1.1)
+xm = max(abs(xtil).max(), 1e-4)
+ax6.set_ylim(-xm*1.2, xm*1.2)
+
+def update(f):
+    i  = f*skip
+    zz = alt[i]
+    arm.set_data([-.35, .35], [zz, zz])
+    rot.set_data([-.35, .35], [zz, zz])
+    if t[i] < t_drop:
+        tether.set_data([0, 0], [zz - .05*SC, zz - .28*SC])
+        pay.set_data([0], [zz - .32*SC])
+    else:
+        tether.set_data([], [])
+        zp = z_release - 0.5*g*(t[i] - t_drop)**2      # free fall
+        if zp > Z_LO:
+            pay.set_data([0], [zp])
+        else:
+            pay.set_data([], [])
+    clock.set_text(f't = {t[i]:5.2f} s\nm = {mass[i]:.2f} kg')
+    s = slice(0, i)
+    lines['alt'].set_data(t[s], alt[s]);  lines['ref'].set_data(t[s], ref[s])
+    lines['err'].set_data(t[s], alt[s]-ref[s])
+    lines['mas'].set_data(t[s], mass[s]); lines['sig'].set_data(t[s], sig[s])
+    lines['u'].set_data(t[s], u_log[s]);  lines['thr'].set_data(t[s], thr[s])
+    lines['xt'].set_data(t[s], xtil[s])
+    return list(lines.values()) + [arm, rot, tether, pay, clock]
+
+ani = FuncAnimation(fig, update, frames=len(ta), interval=20, blit=True, repeat=False)
+if '--save' in sys.argv:
+    ani.save('l1_payload_drop.gif', writer='pillow', fps=40)
+    print('saved l1_payload_drop.gif')
+else:
+    plt.show()
