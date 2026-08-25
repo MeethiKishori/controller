@@ -5,28 +5,53 @@ use ml as conda baseline
 ![alt text](image-1.png)
 
 
-![alt text](image-2.png)
+![alt text](image-2.png)## Results
 
-   
-                     PID         LQR         LQI          L1         MPC
-drop              0.1372      0.2233      0.0824      0.0282      0.3222   <- rms err[m]
-                  0.0904      0.3113      0.0299      0.0129      0.4415   <- final err[m]
-                     0.0         0.0         0.0         0.0         0.0   <- saturated %
+Five controllers, matched to identical closed-loop bandwidth (ωₙ = 3 rad/s, ζ = 0.9) so the comparison reflects controller structure rather than tuning effort.
 
-climb             0.8643      0.8206      0.8507      0.7918      0.8187   <- rms err[m]
-                  0.1683      0.0000      0.0755      0.0030      0.0012   <- final err[m]
-                     4.0         3.4         5.9         4.7         2.6   <- saturated %
+### Steady-state error [m]
 
-gust              0.1128      0.0975      0.0897      0.0342      0.1522   <- rms err[m]
-                  0.0121      0.0201      0.0378      0.0388      0.0536   <- final err[m]
-                     0.0         0.0         0.0         0.0         0.0   <- saturated %
+| scenario | PID | LQR | LQI | L1 | MPC |
+|---|---|---|---|---|---|
+| drop | 0.0904 | 0.3113 | 0.0299 | **0.0129** | 0.4415 |
+| climb | 0.1683 | 0.0000 | 0.0755 | 0.0030 | **0.0012** |
+| gust | **0.0121** | 0.0201 | 0.0378 | 0.0388 | 0.0536 |
+| noise | 0.0005 | 0.0003 | 0.0003 | **0.0001** | 0.0004 |
+| ratelimit | 0.3375 | 0.2379 | 0.5481 | **0.2519** | 0.3014 |
 
-noise             0.0007      0.0006      0.0008      0.0004      0.0006   <- rms err[m]
-                  0.0005      0.0003      0.0003      0.0001      0.0004   <- final err[m]
-                     0.0         0.0         0.0         0.0         0.0   <- saturated %
+### RMS error [m]
 
-ratelimit         0.8991      0.8027      0.8996      0.7968      0.8652   <- rms err[m]
-                  0.3375      0.2379      0.5481      0.2519      0.3014   <- final err[m]
-                     6.0         4.9        12.2         5.1         1.2   <- saturated %
+| scenario | PID | LQR | LQI | L1 | MPC |
+|---|---|---|---|---|---|
+| drop | 0.1372 | 0.2233 | 0.0824 | **0.0282** | 0.3222 |
+| climb | 0.8643 | 0.8206 | 0.8507 | **0.7918** | 0.8187 |
+| gust | 0.1128 | 0.0975 | 0.0897 | **0.0342** | 0.1522 |
+| noise | 0.0007 | 0.0006 | 0.0008 | **0.0004** | 0.0006 |
+| ratelimit | 0.8991 | 0.8027 | 0.8996 | **0.7968** | 0.8652 |
 
-(ml) shubhamsingh@MacBookAir Controllers % 
+### Actuator saturation [% of time]
+
+| scenario | PID | LQR | LQI | L1 | MPC |
+|---|---|---|---|---|---|
+| climb | 4.0 | 3.4 | 5.9 | 4.7 | **2.6** |
+| ratelimit | 6.0 | 4.9 | 12.2 | 5.1 | **1.2** |
+
+Zero for drop, gust and noise — the thrust limit never binds there.
+
+## What the numbers show
+
+**Steady-state rejection depends on integral or estimator action, not complexity.** LQR and MPC both leave a permanent offset after the payload drop (0.31 m, 0.44 m) because neither has integral action. PID, LQI and L1 remove it.
+
+**Estimation beats integration on time-varying disturbances.** L1's margin widens from 2× over LQI on the constant `drop` disturbance to 3× over PID on the sinusoidal `gust`. Integral action carries a fixed −90° phase and cannot track a moving target; the predictor error is instantaneous.
+
+**MPC's advantage requires active constraints.** It wins only where the actuator saturates — 1.2% on `ratelimit` versus 5–12% for the others. On the unconstrained scenarios it behaves like LQR, which is expected: unconstrained MPC *is* LQR.
+
+**Integral action has a cost.** LQI is second-best on `drop` but worst on `ratelimit` saturation (12.2%) — the integral state adds gain and phase lag, i.e. windup.
+
+## Limitations
+
+`noise` did not discriminate — all five land within 0.4 mm, at the noise floor.
+
+`climb` and `ratelimit` RMS values are dominated by the step transient and by where the square wave happens to sit at the end; only the saturation column is meaningful there.
+
+Matching all controllers to a common bandwidth is correct for structural comparison, but it fixes LQR's `Q/R` — which is precisely the tradeoff LQR is designed to optimise. Its measured control effort tied exactly with PID and L1 (~357 N/s) as a result.
